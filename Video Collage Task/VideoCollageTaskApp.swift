@@ -8,7 +8,7 @@
 import SwiftUI
 
 @main
-struct Video_Collage_TaskApp: App {
+struct VideoCollageTaskApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
