@@ -105,118 +105,154 @@ extension VideoCollageView {
         }
     }
     
-        /// Combines and exports the videos as a single collage, saving it to the Photos Library.
-        private func createAndExportCollage(videoURLs: [URL], completion: @escaping (Result<URL, Error>) -> Void) {
-            let composition = AVMutableComposition()
-            let videoComposition = AVMutableVideoComposition()
-            let outputSize = CGSize(width: 1080, height: 1920)
-            videoComposition.renderSize = outputSize
-            videoComposition.frameDuration = CMTime(value: 1, timescale: 30)
     
-            let mainInstruction = AVMutableVideoCompositionInstruction()
-            // This instruction will hold the layer instructions for all the videos.
-            // It defines how multiple video tracks should be composed into a single output.
+    private func isPortraitVideo(videoTrack: AVAssetTrack) -> Bool {
+        let transform = videoTrack.preferredTransform
+        return abs(transform.b) == 1 // If b is ±1, it's a rotated video (portrait)
+    }
     
-            var maxDuration = CMTime.zero
-            // Tracks the maximum duration among all video tracks to set the time range of the main instruction.
-    
-            for (index, videoURL) in videoURLs.enumerated() {
-                let asset = AVAsset(url: videoURL)
-                // Load the video asset from the given URL.
-    
-                guard let videoTrack = asset.tracks(withMediaType: .video).first else {
-                    // Ensure the asset contains a video track; if not, report failure.
-                    completion(.failure(NSError(domain: "Missing video track", code: 0, userInfo: nil)))
-                    return
-                }
-    
-                let timeRange = CMTimeRange(start: .zero, duration: asset.duration)
-                // Define the time range for the video track (start to end of the video).
-    
-                guard let compositionTrack = composition.addMutableTrack(
-                    withMediaType: .video,
-                    preferredTrackID: kCMPersistentTrackID_Invalid
-                ) else {
-                    // Attempt to add a mutable track to the composition for the current video.
-                    // If it fails, report an error.
-                    completion(.failure(NSError(domain: "Track creation failed", code: 0, userInfo: nil)))
-                    return
-                }
-    
-                do {
-                    try compositionTrack.insertTimeRange(timeRange, of: videoTrack, at: .zero)
-                    // Insert the time range of the video track into the composition track.
-                } catch {
-                    completion(.failure(error))
-                    return
-                }
-    
-                let instruction = AVMutableVideoCompositionLayerInstruction(assetTrack: compositionTrack)
-                // Create a layer instruction for the current video track to define its transformation.
-    
-                let videoHeight = outputSize.height / CGFloat(videoURLs.count)
-                // Calculate the height for each video within the collage frame. i.e 1/3
-    
-                let transform = CGAffineTransform(translationX: 0, y: videoHeight * CGFloat(index))
+    func getCorrectTransform(for videoTrack: AVAssetTrack, in outputSize: CGSize, at index: Int, videoHeight: CGFloat) -> CGAffineTransform {
+        var transform = videoTrack.preferredTransform
+        let isPortrait = abs(transform.b) == 1
+        
+        if isPortrait {
+            // Translate to fit portrait video into the designated space.
+            transform = transform.concatenating(
+                CGAffineTransform(translationX: 0, y: (videoHeight * CGFloat(index)) - (videoHeight))
+            )
+        } else {
+            // Landscape video, only translate and scale
+            transform = transform.concatenating(
+                CGAffineTransform(translationX: 0, y: videoHeight * CGFloat(index))
                     .scaledBy(x: outputSize.width / videoTrack.naturalSize.width,
                               y: videoHeight / videoTrack.naturalSize.height)
-                // Apply translation and scaling to fit each video into its designated portion of the frame.
+            )
+        }
+        
+        return transform
+    }
     
-                instruction.setTransform(transform, at: .zero)
-                mainInstruction.layerInstructions.append(instruction)
-                // Add the layer instruction to the main instruction.
-    
-                maxDuration = max(maxDuration, asset.duration)
-                // Update the maximum duration to ensure the collage accommodates the longest video.
-            }
-    
-            mainInstruction.timeRange = CMTimeRange(start: .zero, duration: maxDuration)
-            videoComposition.instructions = [mainInstruction]
-            // Set the main instruction to apply to the entire composition duration.
-    
-            let outputPath = NSTemporaryDirectory() + "collageVideo.mp4"
-            let outputURL = URL(fileURLWithPath: outputPath)
-    
-            if FileManager.default.fileExists(atPath: outputPath) {
-                try? FileManager.default.removeItem(atPath: outputPath)
-                // Remove the file if it already exists at the output path.
-            }
-    
-            guard let exportSession = AVAssetExportSession(
-                asset: composition,
-                presetName: AVAssetExportPresetHighestQuality
-            ) else {
-                // Create an export session for the composition. If it fails, report an error.
-                completion(.failure(NSError(domain: "Export session creation failed", code: 0, userInfo: nil)))
+    /// Combines and exports the videos as a single collage, saving it to the Photos Library.
+    private func createAndExportCollage(videoURLs: [URL], completion: @escaping (Result<URL, Error>) -> Void) {
+        let composition = AVMutableComposition()
+        let videoComposition = AVMutableVideoComposition()
+        let outputSize = CGSize(width: 1080, height: 1920)
+        videoComposition.renderSize = outputSize
+        videoComposition.frameDuration = CMTime(value: 1, timescale: 30)
+        
+        let mainInstruction = AVMutableVideoCompositionInstruction()
+        // This instruction will hold the layer instructions for all the videos.
+        // It defines how multiple video tracks should be composed into a single output.
+        
+        var maxDuration = CMTime.zero
+        // Tracks the maximum duration among all video tracks to set the time range of the main instruction.
+        
+        for (index, videoURL) in videoURLs.enumerated() {
+            let asset = AVAsset(url: videoURL)
+            // Load the video asset from the given URL.
+            
+            guard let videoTrack = asset.tracks(withMediaType: .video).first else {
+                // Ensure the asset contains a video track; if not, report failure.
+                completion(.failure(NSError(domain: "Missing video track", code: 0, userInfo: nil)))
                 return
             }
-    
-            exportSession.outputURL = outputURL
-            exportSession.outputFileType = .mp4
-            exportSession.videoComposition = videoComposition
-    
-            // Update the progress periodically.
-            Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { timer in
-                exportProgress = exportSession.progress
-                if exportSession.progress >= 1.0 {
-                    timer.invalidate()
-                }
+            
+            let timeRange = CMTimeRange(start: .zero, duration: asset.duration)
+            // Define the time range for the video track (start to end of the video).
+            
+            guard let compositionTrack = composition.addMutableTrack(
+                withMediaType: .video,
+                preferredTrackID: kCMPersistentTrackID_Invalid
+            ) else {
+                // Attempt to add a mutable track to the composition for the current video.
+                // If it fails, report an error.
+                completion(.failure(NSError(domain: "Track creation failed", code: 0, userInfo: nil)))
+                return
             }
-    
-            exportSession.exportAsynchronously {
-                DispatchQueue.main.async {
-                    switch exportSession.status {
-                    case .completed:
-                        saveToPhotosLibrary(outputURL: outputURL, completion: completion)
-                    case .failed, .cancelled:
-                        completion(.failure(exportSession.error ?? NSError(domain: "Export failed", code: 0, userInfo: nil)))
-                    default:
-                        break
-                    }
+            
+            do {
+                try compositionTrack.insertTimeRange(timeRange, of: videoTrack, at: .zero)
+                // Insert the time range of the video track into the composition track.
+            } catch {
+                completion(.failure(error))
+                return
+            }
+            
+            
+            let instruction = AVMutableVideoCompositionLayerInstruction(assetTrack: compositionTrack)
+            // Create a layer instruction for the current video track to define its transformation.
+            
+            let videoHeight = outputSize.height / CGFloat(videoURLs.count)
+            
+            // Apply translation and scaling to fit each video into its designated portion of the frame.
+            let transform = getCorrectTransform(for: videoTrack, in: outputSize, at: index, videoHeight: videoHeight)
+            
+            
+            instruction.setTransform(transform, at: .zero)
+            
+            let isPortrait = abs(transform.b) == 1
+            
+            if isPortrait {
+                let cropRect = CGRect(x: (outputSize.height - videoHeight) / 2, y: 0, width: videoHeight, height: outputSize.width)
+                instruction.setCropRectangle(cropRect, at: .zero)
+            }
+            
+            mainInstruction.layerInstructions.append(instruction)
+            // Add the layer instruction to the main instruction.
+            
+            maxDuration = max(maxDuration, asset.duration)
+            // Update the maximum duration to ensure the collage accommodates the longest video.
+        }
+        
+        mainInstruction.timeRange = CMTimeRange(start: .zero, duration: maxDuration)
+        videoComposition.instructions = [mainInstruction]
+        // Set the main instruction to apply to the entire composition duration.
+        
+        let outputPath = NSTemporaryDirectory() + "collageVideo.mp4"
+        let outputURL = URL(fileURLWithPath: outputPath)
+        
+        if FileManager.default.fileExists(atPath: outputPath) {
+            try? FileManager.default.removeItem(atPath: outputPath)
+            // Remove the file if it already exists at the output path.
+        }
+        
+        guard let exportSession = AVAssetExportSession(
+            asset: composition,
+            presetName: AVAssetExportPresetHighestQuality
+        ) else {
+            // Create an export session for the composition. If it fails, report an error.
+            completion(.failure(NSError(domain: "Export session creation failed", code: 0, userInfo: nil)))
+            return
+        }
+        
+        exportSession.outputURL = outputURL
+        exportSession.outputFileType = .mp4
+        exportSession.videoComposition = videoComposition
+        
+        // Update the progress periodically.
+        Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { timer in
+            exportProgress = exportSession.progress
+            if exportSession.progress >= 1.0 {
+                timer.invalidate()
+            }
+        }
+        
+        exportSession.exportAsynchronously {
+            DispatchQueue.main.async {
+                switch exportSession.status {
+                case .completed:
+                    saveToPhotosLibrary(outputURL: outputURL, completion: completion)
+                case .failed, .cancelled:
+                    completion(.failure(exportSession.error ?? NSError(domain: "Export failed", code: 0, userInfo: nil)))
+                default:
+                    break
                 }
             }
         }
-
-
-
+    }
+    
+    
+    
 }
+
+
